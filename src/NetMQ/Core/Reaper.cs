@@ -111,6 +111,11 @@ namespace NetMQ.Core
                 SendStop();
         }
 
+        public void ForceStop()
+        {
+            SendForceStop();
+        }
+
         /// <summary>
         /// Handle input-ready events, by receiving and processing any commands
         /// that are waiting in the mailbox.
@@ -120,8 +125,7 @@ namespace NetMQ.Core
             while (true)
             {
                 // Get the next command. If there is none, exit.
-                Command command;
-                if (!m_mailbox.TryRecv(0, out command))
+                if (!m_mailbox.TryRecv(0, out Command command))
                     break;
 
                 // Process the command.
@@ -163,6 +167,14 @@ namespace NetMQ.Core
                 m_poller.RemoveHandle(m_mailboxHandle);
                 m_poller.Stop();
             }
+        }
+
+        protected override void ProcessForceStop()
+        {
+            m_terminating = true;
+            SendDone();
+            m_poller.RemoveHandle(m_mailboxHandle);
+            m_poller.Stop();
         }
 
         /// <summary>

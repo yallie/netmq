@@ -20,7 +20,11 @@ namespace NetMQ.Core
 
         static MonitorEvent()
         {
+#if NETSTANDARD1_3 || UAP
+            s_sizeOfIntPtr = Marshal.SizeOf<IntPtr>();
+#else
             s_sizeOfIntPtr = Marshal.SizeOf(typeof(IntPtr));
+#endif
 
             if (s_sizeOfIntPtr > 4)
                 s_sizeOfIntPtr = 8;
@@ -107,7 +111,9 @@ namespace NetMQ.Core
 
             var msg = new Msg();
             msg.InitGC((byte[])buffer, buffer.Size);
-            s.TrySend(ref msg, SendReceiveConstants.InfiniteTimeout, false);
+            // An infinite timeout here can cause the IO thread to hang
+            // see https://github.com/zeromq/netmq/issues/539
+            s.TrySend(ref msg, TimeSpan.Zero, false);
         }
 
         [NotNull]

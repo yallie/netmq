@@ -58,7 +58,7 @@ For ZeroMQ/NetMQ to give great performance, some restrictions exist on how we ca
 
 For example, consider socket A with a service loop in thread A, and socket B with a service loop in thread B. It would be invalid to receive a message from socket A (on thread A) and then attempt to send it on socket B. The socket is not threadsafe, and so attempts to use is simultaneously from threads A and B would cause errors.
 
-In fact the pattern described here is known as a [proxy](proxy), and one is built into NetMQ. At this point you may not be surprised to learn that it is powered by a `NetMQPoller`.
+In fact the pattern described here is known as a [proxy](proxy.md), and one is built into NetMQ. At this point you may not be surprised to learn that it is powered by a `NetMQPoller`.
 
 ## Example: ReceiveReady
 
@@ -127,12 +127,12 @@ Sockets and timers may be safely added and removed from the poller while it is r
 
 Note that implementations of `ISocketPollable` include `NetMQSocket`, `NetMQActor` and `NetMQBeacon`. Therefore a `NetMQPoller` can observe any of these types.
 
-* `AddSocket(ISocketPollable)`
-* `RemoveSocket(ISocketPollable)`
-* `AddTimer(NetMQTimer)`
-* `RemoveTimer(NetMQTimer)`
-* `AddPollInSocket(System.Net.Sockets.Socket, Action<Socket>)`
-* `RemovePollInSocket(System.Net.Sockets.Socket)`
+* `Add(ISocketPollable)`
+* `Remove(ISocketPollable)`
+* `Add(NetMQTimer)`
+* `Remove(NetMQTimer)`
+* `Add(System.Net.Sockets.Socket, Action<Socket>)`
+* `Remove(System.Net.Sockets.Socket)`
 
 ## Controlling polling
 
@@ -188,6 +188,43 @@ Which when run gives this output now.
 
 See how the `Hello Again` message was not received? This is due to the `ResponseSocket` being removed from the `NetMQPoller` during processing of the first message in the `ReceiveReady` event handler.
 
+## Performance
+
+Receiving messages with poller is slower than directly calling Receive method on the socket. 
+When handling thousands of messages a second, or more, poller can be a bottleneck.
+However the solution is pretty simple, we just need to fetch all messages currently available with the socket using the Try* methods. Following is an example:
+
+    :::csharp
+    rep1.ReceiveReady += (s, a) =>
+    {
+        string msg;
+        // receiving all messages currently available in the socket before returning to the poller
+        while (a.Socket.TryReceiveFrameString(out msg))
+        {
+            // send a response
+            a.Socket.Send("Response");
+        }
+    };
+
+The above solution can cause starvation of other sockets if socket is loaded with non-stop flow of messages.
+To solve this you can limit the number of messages that can be fetch in one batch.
+
+    :::csharp
+    rep1.ReceiveReady += (s, a) =>
+    {
+        string msg;
+        //  receiving 1000 messages or less if not available
+        for (int count = 0; count < 1000; i++)
+        {
+            // exit the for loop if failed to receive a message
+            if (!a.Socket.TryReceiveFrameString(out msg))
+                break;
+                
+            // send a response
+            a.Socket.Send("Response");
+        }
+    };
+
 ## Further Reading
 
-A good place to look for more information and code samples is the [`Poller` unit test source](https://github.com/zeromq/netmq/blob/master/src/NetMQ.Tests/PollerTests.cs).
+A good place to look for more information and code samples is the [`Poller` unit test source](https://github.com/zeromq/netmq/blob/master/src/NetMQ.Tests/NetMQPollerTest.cs).

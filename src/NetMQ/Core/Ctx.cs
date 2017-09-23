@@ -33,11 +33,10 @@ namespace NetMQ.Core
     /// associated with the NetMQ library. This contains the sockets, and manages interaction
     /// between them.
     /// </summary>
-    /// <remarks>Internal analog of the public <see cref="NetMQContext"/> class.</remarks>
     internal sealed class Ctx
     {
-        private const int DefaultIOThreads = 1;
-        private const int DefaultMaxSockets = 1024;
+        internal const int DefaultIOThreads = 1;
+        internal const int DefaultMaxSockets = 1024;
 
         #region Nested class: Endpoint
 
@@ -69,12 +68,10 @@ namespace NetMQ.Core
             /// Get the Options of this Endpoint.
             /// </summary>
             [NotNull]
-            public Options Options { get; private set; }
+            public Options Options { get; }
         }
 
         #endregion
-
-        private bool m_disposed;
 
         /// <summary>
         /// Sockets belonging to this context. We need the list so that
@@ -158,11 +155,6 @@ namespace NetMQ.Core
         private int m_ioThreadCount = DefaultIOThreads;
 
         /// <summary>
-        /// Should the context termination block until all socket are disposed?
-        /// </summary>
-        private bool m_block = true;
-
-        /// <summary>
         /// This object is used to synchronize access to context options.
         /// </summary>
         private readonly object m_optSync = new object();
@@ -176,14 +168,6 @@ namespace NetMQ.Core
         /// This is the thread-id to assign to the Reaper (value is 1).
         /// </summary>
         public const int ReaperTid = 1;
-        
-        /// <summary>Throws <see cref="ObjectDisposedException"/> if this is already disposed.</summary>
-        /// <exception cref="ObjectDisposedException">This object has already been disposed.</exception>
-        public void CheckDisposed()
-        {
-            if (m_disposed)
-                throw new ObjectDisposedException(GetType().FullName);
-        }
 
         /// <summary>
         /// This function is called when user invokes zmq_term. If there are
@@ -191,10 +175,8 @@ namespace NetMQ.Core
         /// down. If there are open sockets still, the deallocation happens
         /// after the last one is closed.
         /// </summary>
-        public void Terminate()
+        public void Terminate(bool block)
         {
-            m_disposed = true;
-
             Monitor.Enter(m_slotSync);
 
             if (!m_starting)
@@ -217,7 +199,9 @@ namespace NetMQ.Core
                         foreach (var socket in m_sockets)
                             socket.Stop();
 
-                        if (m_sockets.Count == 0)
+                        if (!block)
+                            m_reaper.ForceStop();
+                        else if (m_sockets.Count == 0)
                             m_reaper.Stop();
                     }
                     finally
@@ -226,19 +210,12 @@ namespace NetMQ.Core
                     }
                 }
 
-                if (m_block)
-                {
-                    // Wait till reaper thread closes all the sockets.
-                    Command command;
-                    var found = m_termMailbox.TryRecv(-1, out command);
+                // Wait till reaper thread closes all the sockets.
+                var found = m_termMailbox.TryRecv(-1, out Command command);
 
-                    Debug.Assert(found);
-                    Debug.Assert(command.CommandType == CommandType.Done);
-                    Monitor.Enter(m_slotSync);
-                    Debug.Assert(m_sockets.Count == 0);
-                }
-                else
-                    Monitor.Enter(m_slotSync);
+                Debug.Assert(found);
+                Debug.Assert(command.CommandType == CommandType.Done);
+                Monitor.Enter(m_slotSync);
             }
             Monitor.Exit(m_slotSync);
 
@@ -252,13 +229,11 @@ namespace NetMQ.Core
             m_reaper?.Destroy();
 
             m_termMailbox.Close();
-
-            m_disposed = true;
         }
 
         public int IOThreadCount
         {
-            get { return m_ioThreadCount; }
+            get => m_ioThreadCount;
             set
             {
                 if (value < 0)
@@ -270,27 +245,13 @@ namespace NetMQ.Core
 
         public int MaxSockets
         {
-            get { return m_maxSockets; }
+            get => m_maxSockets;
             set
             {
                 if (value <= 0)
                     throw new ArgumentOutOfRangeException(nameof(value), value, "Must be greater than zero");
                 lock (m_optSync)
                     m_maxSockets = value;
-            }
-        }
-
-        /// <summary>
-        /// Should context wait for all sockets before terminating?
-        /// </summary>
-        public bool Block
-        {
-
-            get { return m_block; }
-            set
-            {                
-                lock (m_optSync)
-                    m_block = value;
             }
         }
 
@@ -494,9 +455,8 @@ namespace NetMQ.Core
         {
             lock (m_endpointsSync)
             {
-                Endpoint endpoint;
 
-                if (!m_endpoints.TryGetValue(address, out endpoint))
+                if (!m_endpoints.TryGetValue(address, out Endpoint endpoint))
                     return false;
 
                 if (socket != endpoint.Socket)

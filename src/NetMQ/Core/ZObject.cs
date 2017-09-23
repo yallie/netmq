@@ -2,7 +2,7 @@
     Copyright (c) 2009-2011 250bpm s.r.o.
     Copyright (c) 2007-2009 iMatix Corporation
     Copyright (c) 2007-2015 Other contributors as noted in the AUTHORS file
-    
+
     This file is part of 0MQ.
 
     0MQ is free software; you can redistribute it and/or modify it under
@@ -115,8 +115,13 @@ namespace NetMQ.Core
         /// </summary>
         protected void SendStop()
         {
-            // 'stop' command goes always from administrative thread to the current object. 
+            // 'stop' command goes always from administrative thread to the current object.
             m_ctx.SendCommand(m_threadId, new Command(this, CommandType.Stop));
+        }
+
+        protected void SendForceStop()
+        {
+            m_ctx.SendCommand(m_threadId, new Command(this, CommandType.ForceStop));
         }
 
         /// <summary>
@@ -316,6 +321,10 @@ namespace NetMQ.Core
                     ProcessReaped();
                     break;
 
+                case CommandType.ForceStop:
+                    ProcessForceStop();
+                    break;
+
                 default:
                     throw new ArgumentException();
             }
@@ -323,6 +332,12 @@ namespace NetMQ.Core
 
         /// <exception cref="NotSupportedException">Not supported on the ZObject class.</exception>
         protected virtual void ProcessStop()
+        {
+            throw new NotSupportedException();
+        }
+
+        /// <exception cref="NotSupportedException">Not supported on the ZObject class.</exception>
+        protected virtual void ProcessForceStop()
         {
             throw new NotSupportedException();
         }

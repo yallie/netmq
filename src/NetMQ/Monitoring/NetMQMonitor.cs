@@ -29,8 +29,6 @@ namespace NetMQ.Monitoring
 
         private readonly ManualResetEvent m_isStoppedEvent = new ManualResetEvent(true);
 
-        /// <summary>
-        /// </summary>
         public NetMQMonitor([NotNull] NetMQSocket monitoredSocket, [NotNull] string endpoint, SocketEvents eventsToMonitor)
         {
             Endpoint = endpoint;
@@ -218,8 +216,6 @@ namespace NetMQ.Monitoring
             }
         }
 
-        /// <summary>
-        /// </summary>
         public void AttachToPoller([NotNull] ISocketPollableCollection poller)
         {
             if (poller == null)
@@ -233,8 +229,6 @@ namespace NetMQ.Monitoring
             poller.Add(m_monitoringSocket);
         }
 
-        /// <summary>
-        /// </summary>
         public void DetachFromPoller()
         {
             if (m_attachedPoller == null)
@@ -251,9 +245,6 @@ namespace NetMQ.Monitoring
         /// <exception cref="InvalidOperationException">The Monitor must not have already started nor attached to a poller.</exception>
         public void Start()
         {
-            // in case the sockets is created in another thread
-            Thread.MemoryBarrier();
-
             if (IsRunning)
                 throw new InvalidOperationException("Monitor already started");
 
@@ -336,7 +327,11 @@ namespace NetMQ.Monitoring
 
             m_monitoringSocket.ReceiveReady -= Handle;
 
+#if NET35
             m_isStoppedEvent.Close();
+#else
+            m_isStoppedEvent.Dispose();
+#endif
 
             if (m_ownsMonitoringSocket)
             {

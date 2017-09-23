@@ -22,6 +22,9 @@
 using System;
 using System.Diagnostics;
 using System.Net.Sockets;
+#if NETSTANDARD1_3
+using System.Runtime.InteropServices;
+#endif
 using AsyncIO;
 using JetBrains.Annotations;
 
@@ -46,10 +49,12 @@ namespace NetMQ.Core.Transports.Tcp
         [CanBeNull]
         private AsyncSocket m_handle;
 
+/*
         /// <summary>
         /// socket being accepted
         /// </summary>
         private AsyncSocket m_acceptedSocket;
+*/
 
         /// <summary>
         /// Socket the listener belongs to.
@@ -121,14 +126,14 @@ namespace NetMQ.Core.Transports.Tcp
             try
             {
                 m_handle = AsyncSocket.Create(m_address.Address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
-                
+
                 Debug.Assert(m_handle != null);
 
                 if (!m_options.IPv4Only && m_address.Address.AddressFamily == AddressFamily.InterNetworkV6)
                 {
                     try
                     {
-                        // This is not supported on old windows operation system and might throw exception
+                        // This is not supported on old windows operating systems and might throw exception
                         m_handle.SetSocketOption(SocketOptionLevel.IPv6, IPv6Only, 0);
                     }
                     catch
@@ -136,7 +141,13 @@ namespace NetMQ.Core.Transports.Tcp
                     }
                 }
 
+#if NETSTANDARD1_3
+                // This command is failing on linux
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                    m_handle.ExclusiveAddressUse = false;
+#else
                 m_handle.ExclusiveAddressUse = false;
+#endif
                 m_handle.Bind(m_address.Address);
                 m_handle.Listen(m_options.Backlog);
 
@@ -157,10 +168,10 @@ namespace NetMQ.Core.Transports.Tcp
 
         private void Accept()
         {
-            m_acceptedSocket = AsyncSocket.Create(m_address.Address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+            //m_acceptedSocket = AsyncSocket.Create(m_address.Address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
 
             // start accepting socket async
-            m_handle.Accept(m_acceptedSocket);
+            m_handle.Accept();
 
             // Disable TIME_WAIT tcp state
             if (m_options.DisableTimeWait)
@@ -180,12 +191,13 @@ namespace NetMQ.Core.Transports.Tcp
                 case SocketError.Success:
                 {
                     // TODO: check TcpFilters
+                    var acceptedSocket = m_handle.GetAcceptedSocket();
 
-                    m_acceptedSocket.NoDelay = true;
+                        acceptedSocket.NoDelay = true;
 
                     if (m_options.TcpKeepalive != -1)
                     {
-                        m_acceptedSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, m_options.TcpKeepalive);
+                        acceptedSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, m_options.TcpKeepalive);
 
                         if (m_options.TcpKeepaliveIdle != -1 && m_options.TcpKeepaliveIntvl != -1)
                         {
@@ -197,18 +209,18 @@ namespace NetMQ.Core.Transports.Tcp
                             bytes.PutInteger(endian, m_options.TcpKeepaliveIdle, 4);
                             bytes.PutInteger(endian, m_options.TcpKeepaliveIntvl, 8);
 
-                            m_acceptedSocket.IOControl(IOControlCode.KeepAliveValues, (byte[])bytes, null);
+                            acceptedSocket.IOControl(IOControlCode.KeepAliveValues, (byte[])bytes, null);
                         }
                     }
 
                     // Create the engine object for this connection.
-                    var engine = new StreamEngine(m_acceptedSocket, m_options, m_endpoint);
+                    var engine = new StreamEngine(acceptedSocket, m_options, m_endpoint);
 
                     // Choose I/O thread to run connector in. Given that we are already
                     // running in an I/O thread, there must be at least one available.
                     IOThread ioThread = ChooseIOThread(m_options.Affinity);
 
-                    // Create and launch a session object. 
+                    // Create and launch a session object.
                     // TODO: send null in address parameter, is unneeded in this case
                     SessionBase session = SessionBase.Create(ioThread, false, m_socket, m_options, new Address(m_handle.LocalEndPoint));
                     session.IncSeqnum();
@@ -216,7 +228,7 @@ namespace NetMQ.Core.Transports.Tcp
 
                     SendAttach(session, engine, false);
 
-                    m_socket.EventAccepted(m_endpoint, m_acceptedSocket);
+                    m_socket.EventAccepted(m_endpoint, acceptedSocket);
 
                     Accept();
                     break;
@@ -225,7 +237,6 @@ namespace NetMQ.Core.Transports.Tcp
                 case SocketError.NoBufferSpaceAvailable:
                 case SocketError.TooManyOpenSockets:
                 {
-                    m_acceptedSocket.Dispose();
                     m_socket.EventAcceptFailed(m_endpoint, socketError.ToErrorCode());
 
                     Accept();
@@ -233,8 +244,6 @@ namespace NetMQ.Core.Transports.Tcp
                 }
                 default:
                 {
-                    m_acceptedSocket.Dispose();
-
                     NetMQException exception = NetMQException.Create(socketError);
 
                     m_socket.EventAcceptFailed(m_endpoint, exception.ErrorCode);
@@ -261,18 +270,6 @@ namespace NetMQ.Core.Transports.Tcp
                 m_socket.EventCloseFailed(m_endpoint, ex.SocketErrorCode.ToErrorCode());
             }
 
-            if (m_acceptedSocket != null)
-            {
-                try
-                {
-                    m_acceptedSocket.Dispose();
-                }
-                catch (SocketException)
-                {
-                }
-            }
-
-            m_acceptedSocket = null;
             m_handle = null;
         }
 

@@ -2,8 +2,10 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
 using JetBrains.Annotations;
 using NetMQ.Sockets;
+using System.Runtime.InteropServices;
 
 namespace NetMQ
 {
@@ -25,15 +27,11 @@ namespace NetMQ
         /// Get the NetMQBeacon object that this holds.
         /// </summary>
         [NotNull]
-        public NetMQBeacon Beacon { get; private set; }
+        public NetMQBeacon Beacon { get; }
     }
 
-    /// <summary>
-    /// </summary>
     public sealed class NetMQBeacon : IDisposable, ISocketPollable
     {
-        /// <summary>
-        /// </summary>
         public const int UdpFrameMax = 255;
 
         private const string ConfigureCommand = "CONFIGURE";
@@ -63,7 +61,12 @@ namespace NetMQ
                 if (m_udpSocket != null)
                 {
                     m_poller.Remove(m_udpSocket);
+
+#if NET35
                     m_udpSocket.Close();
+#else
+                    m_udpSocket.Dispose();
+#endif
                 }
 
                 m_udpPort = port;
@@ -103,8 +106,25 @@ namespace NetMQ
                     {
                         if (interfaceAddress == null || @interface.Address.Equals(interfaceAddress))
                         {
-                            sendTo = @interface.BroadcastAddress;
-                            bindTo = @interface.Address;
+							// because windows and unix differ in how they handle broadcast addressing this needs to be platform specific
+							// on windows any interface can recieve broadcast by requesting to enable broadcast on the socket
+							// on linux to recieve broadcast you must bind to the broadcast address specifically
+							//bindTo = @interface.Address;
+							sendTo = @interface.BroadcastAddress;
+#if NET35 || NET40
+							if (Environment.OSVersion.Platform==PlatformID.Unix)
+#else
+							if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+#endif						
+							{
+								bindTo = @interface.BroadcastAddress;
+							}
+							else
+							{
+								bindTo = @interface.Address;
+							}
+							sendTo = @interface.BroadcastAddress;
+
                             break;
                         }
                     }
@@ -142,12 +162,17 @@ namespace NetMQ
                 m_pingTimer.Elapsed += PingElapsed;
                 m_pingTimer.Enable = false;
 
-                m_poller = new NetMQPoller { m_pipe, m_pingTimer };
-
-                m_poller.Run();
+                using (m_poller = new NetMQPoller { m_pipe, m_pingTimer })
+                {
+                    m_poller.Run();
+                }
 
                 // the beacon might never been configured
+#if NET35
                 m_udpSocket?.Close();
+#else
+                m_udpSocket?.Dispose();
+#endif
             }
 
             private void PingElapsed(object sender, NetMQTimerEventArgs e)
@@ -157,8 +182,7 @@ namespace NetMQ
 
             private void OnUdpReady(Socket socket)
             {
-                string peerName;
-                var frame = ReceiveUdpFrame(out peerName);
+                var frame = ReceiveUdpFrame(out string peerName);
 
                 // If filter is set, check that beacon matches it
                 var isValid = frame.MessageSize >= m_filter?.MessageSize && Compare(frame, m_filter, m_filter.MessageSize);
@@ -233,7 +257,7 @@ namespace NetMQ
             }
         }
 
-        #endregion
+#endregion
 
         private readonly NetMQActor m_actor;
 
@@ -241,6 +265,7 @@ namespace NetMQ
 
         [CanBeNull] private string m_boundTo;
         [CanBeNull] private string m_hostName;
+        private int m_isDisposed;
 
         /// <summary>
         /// Create a new NetMQBeacon.
@@ -249,12 +274,11 @@ namespace NetMQ
         {
             m_actor = NetMQActor.Create(new Shim());
 
-            EventHandler<NetMQActorEventArgs> onReceive = (sender, e) =>
-                m_receiveEvent.Fire(this, new NetMQBeaconEventArgs(this));
+            void OnReceive(object sender, NetMQActorEventArgs e) => m_receiveEvent.Fire(this, new NetMQBeaconEventArgs(this));
 
             m_receiveEvent = new EventDelegator<NetMQBeaconEventArgs>(
-                () => m_actor.ReceiveReady += onReceive,
-                () => m_actor.ReceiveReady -= onReceive);
+                () => m_actor.ReceiveReady += OnReceive,
+                () => m_actor.ReceiveReady -= OnReceive);
         }
 
         /// <summary>
@@ -289,7 +313,11 @@ namespace NetMQ
 
                 try
                 {
+#if NETSTANDARD1_3 || UAP
+                    return m_hostName = Dns.GetHostEntryAsync(boundTo).Result.HostName;
+#else
                     return m_hostName = Dns.GetHostEntry(boundTo).HostName;
+#endif
                 }
                 catch
                 {
@@ -313,8 +341,8 @@ namespace NetMQ
         /// </summary>
         public event EventHandler<NetMQBeaconEventArgs> ReceiveReady
         {
-            add { m_receiveEvent.Event += value; }
-            remove { m_receiveEvent.Event -= value; }
+            add => m_receiveEvent.Event += value;
+            remove => m_receiveEvent.Event -= value;
         }
 
         /// <summary>
@@ -439,8 +467,7 @@ namespace NetMQ
         /// <returns><c>true</c> if a beacon message was received, otherwise <c>false</c>.</returns>
         public bool TryReceive(TimeSpan timeout, out BeaconMessage message)
         {
-            string peerName;
-            if (!m_actor.TryReceiveFrameString(timeout, out peerName))
+            if (!m_actor.TryReceiveFrameString(timeout, out string peerName))
             {
                 message = default(BeaconMessage);
                 return false;
@@ -452,13 +479,17 @@ namespace NetMQ
             return true;
         }
 
-        /// <summary>
-        /// </summary>
+        /// <inheritdoc />
         public void Dispose()
         {
+            if (Interlocked.CompareExchange(ref m_isDisposed, 1, 0) != 0)
+                return;
             m_actor.Dispose();
             m_receiveEvent.Dispose();
         }
+
+        /// <inheritdoc />
+        public bool IsDisposed => m_isDisposed != 0;
     }
 
     /// <summary>

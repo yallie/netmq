@@ -202,6 +202,10 @@ namespace NetMQ.Core.Transports.Tcp
             {
                 OutCompleted(ex.SocketErrorCode, 0);
             }
+            // TerminatingException can occur in above call to EventConnectDelayed via
+            // MonitorEvent.Write if corresponding PairSocket has been sent Term command
+            catch (TerminatingException)
+            {}
         }
 
         /// <summary>
@@ -225,9 +229,11 @@ namespace NetMQ.Core.Transports.Tcp
                 if (socketError == SocketError.ConnectionRefused || socketError == SocketError.TimedOut ||
                     socketError == SocketError.ConnectionAborted ||
                     socketError == SocketError.HostUnreachable || socketError == SocketError.NetworkUnreachable ||
-                    socketError == SocketError.NetworkDown || socketError == SocketError.AccessDenied)
+                    socketError == SocketError.NetworkDown || socketError == SocketError.AccessDenied ||
+                    socketError == SocketError.OperationAborted)
                 {
-                    AddReconnectTimer();
+                    if (m_options.ReconnectIvl >= 0)
+                        AddReconnectTimer();
                 }
                 else
                 {

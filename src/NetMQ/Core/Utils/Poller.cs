@@ -136,7 +136,6 @@ namespace NetMQ.Core.Utils
             {
                 try
                 {
-                    m_stopping = true;
                     m_workerThread.Join();
                 }
                 catch (Exception)
